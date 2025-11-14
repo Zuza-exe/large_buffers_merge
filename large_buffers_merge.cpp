@@ -1,14 +1,15 @@
-#include <cstdio>
+#include <iostream>
 #include <vector>
 #include <fstream>
 
 using namespace std;
 
-#define		N	1000
-#define		b	50
-#define		n	4
+//#define		N	1000
+//#define		b	50
+//#define		n	4
 
-#define		FILENAME	"test_data.txt"
+#define		TXT_FILENAME	"test_data.txt"
+#define		DAT_FILENAME	"test_data.dat"
 
 // Liczniki operacji blokowych (globalne zmienne symulujące statystyki)
 int readCount = 0;
@@ -49,6 +50,52 @@ void write_record(ofstream &f, const Record &p) {
     writeCount++;
 }
 
+void txt_to_dat(const string &txt, const string &dat) {
+    ifstream in(txt);
+    ofstream out(dat, ios::binary | ios::out | ios::trunc);  // TRUNCATE + OUT
+
+    if (!in.is_open()) {
+        cerr << "Nie można otworzyć pliku tekstowego!" << endl;
+        return;
+    }
+    if (!out.is_open()) {
+        cerr << "Nie można otworzyć pliku binarnego do zapisu!" << endl;
+        return;
+    }
+
+    Record r;
+    while (true) {
+        for (int i = 0; i < 5; i++) {
+            if (!(in >> r.sides[i])) {
+                return; // koniec pliku TXT
+            }
+        }
+        out.write((char*)&r, sizeof(Record));
+    }
+}
+
+void print_dat_file(const string &filename) {
+    ifstream in(filename, ios::binary);
+    if (!in.is_open()) {
+        cerr << "Nie mogę otworzyć pliku: " << filename << endl;
+        return;
+    }
+
+    Record p;
+    int index = 0;
+
+    cout << "Zawartosc pliku " << filename << ":\n\n";
+
+    while (in.read((char*)&p, sizeof(Record))) {
+        cout << "Rekord " << index++ << ":  ";
+        for (int i = 0; i < 5; i++)
+            cout << p.sides[i] << " ";
+        cout << " | obwód = " << perimeter(p) << endl;
+    }
+
+    in.close();
+}
+
 // Tworzenie początkowych serii
 void create_runs(const string &inputFile, int runSize) {
     ifstream in(inputFile.c_str(), ios::binary);
@@ -62,21 +109,22 @@ void create_runs(const string &inputFile, int runSize) {
     buffer.reserve(runSize);
 
     Record record;
-    while (readRecord(in, record)) {               // 🔸 używamy funkcji warstwy I/O
+    while (read_record(in, record)) {               // 🔸 używamy funkcji warstwy I/O
         buffer.push_back(record);
 
         if ((int)buffer.size() == runSize) {
             qsort(&buffer[0], buffer.size(), sizeof(Record), compare_records);
 
-            string runName = "run" + to_string(runIndex) + ".dat";
-            ofstream out(runName.c_str(), ios::binary);
+            string run_name = "run" + to_string(runIndex) + ".dat";
+            ofstream out(run_name.c_str(), ios::binary);
 
             for (size_t i = 0; i < buffer.size(); i++) {
-                writeRecord(out, buffer[i]);       // 🔸 używamy funkcji warstwy I/O
+                write_record(out, buffer[i]);       // 🔸 używamy funkcji warstwy I/O
             }
 
             out.close();
-            buffer.clear();
+            print_dat_file(run_name);
+			buffer.clear();
             runIndex++;
         }
     }
@@ -84,12 +132,14 @@ void create_runs(const string &inputFile, int runSize) {
     // Zapisz pozostałości (ostatnią, niepełną serię)
     if (!buffer.empty()) {
         qsort(&buffer[0], buffer.size(), sizeof(Record), compare_records);
-        string runName = "run" + to_string(runIndex) + ".dat";
-        ofstream out(runName.c_str(), ios::binary);
+        string run_name = "run" + to_string(runIndex) + ".dat";
+        ofstream out(run_name.c_str(), ios::binary);
         for (size_t i = 0; i < buffer.size(); i++) {
-            writeRecord(out, buffer[i]);
+            write_record(out, buffer[i]);
         }
+		
         out.close();
+		print_dat_file(run_name);
     }
 
     in.close();
@@ -97,5 +147,8 @@ void create_runs(const string &inputFile, int runSize) {
 
 int main()
 {
-
+	txt_to_dat(TXT_FILENAME, DAT_FILENAME); 
+	print_dat_file(DAT_FILENAME);
+	create_runs(DAT_FILENAME, 5);
+	return 0;
 }
