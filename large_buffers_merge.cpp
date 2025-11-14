@@ -1,5 +1,4 @@
-#include "quicksort.cpp"
-
+#include <cstdio>
 #include <vector>
 #include <fstream>
 
@@ -67,7 +66,7 @@ void create_runs(const string &inputFile, int runSize) {
         buffer.push_back(record);
 
         if ((int)buffer.size() == runSize) {
-            sort(buffer.begin(), buffer.end(), compareByPerimeter);
+            qsort(&buffer[0], buffer.size(), sizeof(Record), compare_records);
 
             string runName = "run" + to_string(runIndex) + ".dat";
             ofstream out(runName.c_str(), ios::binary);
@@ -84,7 +83,7 @@ void create_runs(const string &inputFile, int runSize) {
 
     // Zapisz pozostałości (ostatnią, niepełną serię)
     if (!buffer.empty()) {
-        sort(buffer.begin(), buffer.end(), compareByPerimeter);
+        qsort(&buffer[0], buffer.size(), sizeof(Record), compare_records);
         string runName = "run" + to_string(runIndex) + ".dat";
         ofstream out(runName.c_str(), ios::binary);
         for (size_t i = 0; i < buffer.size(); i++) {
