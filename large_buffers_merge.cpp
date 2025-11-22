@@ -6,9 +6,9 @@
 
 using namespace std;
 
-#define		NUMBER_OF_RECORDS	1000	//N
-#define		BLOCKING_FACTOR	50		//b
-#define		NUMBER_OF_BUFFERS	4		//n
+//#define		NUMBER_OF_RECORDS	1000	//N
+#define		BLOCKING_FACTOR	2		//b
+#define		NUMBER_OF_BUFFERS	3		//n
 
 #define		TXT_FILENAME	"test_data.txt"
 #define		DAT_FILENAME	"test_data.dat"
@@ -33,7 +33,7 @@ double perimeter (const Record &p) {
 
 struct HeapNode {
     Record rec;
-    int idx; // indeks pliku/runu
+    int run_id; //index of run in which the record was
 
     bool operator>(const HeapNode &other) const {
         return perimeter(rec) > perimeter(other.rec); // minimalny rekord na szczycie
@@ -115,7 +115,7 @@ void print_dat_file(const string &filename) {
 }
 
 // Tworzenie początkowych serii
-void create_runs(const string &inputFile, int runSize) {
+void create_runs(vector<string> &runs, const string &inputFile, int runSize) {
     ifstream in(inputFile.c_str(), ios::binary);
     if (!in.is_open()) {
         cerr << "Błąd: nie można otworzyć pliku " << inputFile << endl;
@@ -123,109 +123,281 @@ void create_runs(const string &inputFile, int runSize) {
     }
 
     int runIndex = 0;
-    vector<Record> buffer;
-    buffer.reserve(runSize);
+    int counter = 0;
+    Record buffer[NUMBER_OF_BUFFERS * BLOCKING_FACTOR];
 
     Record record;
     while (read_record(in, record)) {               // 🔸 używamy funkcji warstwy I/O
-        buffer.push_back(record);
+        //buffer.push_back(record);
+        buffer[counter] = record;
+        counter++;
 
-        if ((int)buffer.size() == runSize) {
-            qsort(&buffer[0], buffer.size(), sizeof(Record), compare_records);
+        if (counter == runSize) {
+            qsort(&buffer[0], runSize, sizeof(Record), compare_records);
 
             string run_name = "run" + to_string(runIndex) + ".dat";
             ofstream out(run_name.c_str(), ios::binary);
 
-            for (size_t i = 0; i < buffer.size(); i++) {
+            for (size_t i = 0; i < runSize; i++) {
                 write_record(out, buffer[i]);       // 🔸 używamy funkcji warstwy I/O
             }
 
             out.close();
             print_dat_file(run_name);
-			buffer.clear();
+			counter = 0;
+            runs.push_back(run_name);
             runIndex++;
         }
     }
 
     // Zapisz pozostałości (ostatnią, niepełną serię)
-    if (!buffer.empty()) {
-        qsort(&buffer[0], buffer.size(), sizeof(Record), compare_records);
+    if (counter > 0) {
+        qsort(&buffer[0], counter, sizeof(Record), compare_records);
         string run_name = "run" + to_string(runIndex) + ".dat";
         ofstream out(run_name.c_str(), ios::binary);
-        for (size_t i = 0; i < buffer.size(); i++) {
+        for (size_t i = 0; i < counter; i++) {
             write_record(out, buffer[i]);
         }
-		
         out.close();
 		print_dat_file(run_name);
+        runs.push_back(run_name);
     }
 
     in.close();
 }
 
-void merge_runs(const vector<string> &inputRuns, const string &outputRun) {
-    int k = inputRuns.size();
+void reset_end_of_input(bool end_of_input[NUMBER_OF_BUFFERS-1])
+{
+    for (int i = 0; i<NUMBER_OF_BUFFERS-1; i++)
+    {
+        end_of_input[i] = false;
+    }
+}
 
-    // Otwieramy wszystkie pliki wejściowe
-    vector<ifstream> inputs(k);
-    for (int i = 0; i < k; i++) {
-        inputs[i].open(inputRuns[i], ios::binary);
-        if (!inputs[i].is_open()) {
-            cerr << "Błąd: nie mogę otworzyć " << inputRuns[i] << endl;
-            return;
+bool all_inputs_empty(bool end_of_input[NUMBER_OF_BUFFERS-1])
+{
+    for (int i = 0; i<NUMBER_OF_BUFFERS-1; i++)
+    {
+        if (!end_of_input[i])
+        {
+            return false;
         }
     }
+    return true;
+}
 
-    ofstream out(outputRun, ios::binary);
-    if (!out.is_open()) {
-        cerr << "Błąd: nie mogę otworzyć wyjściowego " << outputRun << endl;
+/*//for debugging
+void print_buffer(Record buffers[BLOCKING_FACTOR])
+{
+    for(int j = 0; j<BLOCKING_FACTOR;j++)
+    {
+        for(int i = 0; i<5; i++)
+        {
+            cout<<buffers[j].sides[i]<<" ";
+        }
+        cout<<endl;
+    }
+}*/
+
+void merge_runs(const vector<string> &input_runs, const string &final_output_run)
+{
+    int input_runs_number = input_runs.size();
+
+    if (input_runs_number == 1)
+    {
+        rename(input_runs[0].c_str(), final_output_run.c_str());     //the only output run left is the final one
         return;
     }
 
-    // Min-heap
-    priority_queue<HeapNode, vector<HeapNode>, greater<HeapNode>> heap;
+    priority_queue<HeapNode, vector<HeapNode>, greater<HeapNode>> heap;     //initializing min-heap
 
-    // Inicjalizacja heap: wczytujemy pierwszy rekord z każdego pliku
-    for (int i = 0; i < k; i++) {
-        Record rec;
-        if (read_record(inputs[i], rec)) {
-            heap.push({rec, i});
+    vector<string> merged_runs;     //vector of names of merged runs
+
+    int merged_runs_number = 0;     //to give names to merged files
+    int i = 0;
+
+    while (i<input_runs_number)           //repeat until reaching the end of the file (process all input runs)
+    {
+        //Buffers
+        Record buffers[NUMBER_OF_BUFFERS - 1][BLOCKING_FACTOR];
+        Record output_buffer[BLOCKING_FACTOR];
+        
+        //Subsidiary arrays
+        ifstream inputs [NUMBER_OF_BUFFERS - 1];    //run FILES to read in this cycle
+        bool end_of_input [NUMBER_OF_BUFFERS - 1];  //flag if we reached end of the input file
+
+        int buffers_to_process = NUMBER_OF_BUFFERS-1;       //n-1 by default, changed when we reach the final run
+
+        reset_end_of_input(end_of_input);   //mark all n-1 input runs as not empty
+
+        //Opening n-1 files and loading first b records to buffers
+        for (int j = 0; j<buffers_to_process; j++)
+        {
+            //opening files
+            inputs[j].open(input_runs[i], ios::binary);
+            if (!inputs[j].is_open()) {
+                cerr << "Error: Couldn't open file " << input_runs[i] << endl;
+                return;
+            }
+
+            //filling with first b records 
+            int record_counter = 0;
+            while(record_counter < BLOCKING_FACTOR)
+            {
+                Record record;
+                if (read_record(inputs[j],record))
+                {
+                    buffers[j][record_counter] = record;        //filling buffer
+                    record_counter++;
+                }
+                else
+                {
+                    for (int k = record_counter; k < BLOCKING_FACTOR-1; k++)        //if run has less than b records - the last file
+                    {
+                        buffers[j][k] = {-1, -1, -1, -1, -1};       //filling with "empty" records
+                    }
+                    buffers_to_process = j;
+                    for(int k = j+1; k<NUMBER_OF_BUFFERS-1; k++)
+                    {
+                        end_of_input[k] = true;         //getting rid of unnecessary buffers <- backup - may be not needed
+                    }
+                    //i++;    //may not be needed, but won't harm
+                    break;
+                }
+            }
+            i++;
+            if(i == input_runs_number)
+            {
+                buffers_to_process = j+1;
+                break;
+            }
+        }
+
+        //We have n-1 buffers filled with first b records
+
+        //Record indexes - for counting records
+        int output_record_id = 0;
+        int *input_record_id = new int [buffers_to_process];
+        for (int j = 0; j<buffers_to_process; j++)
+        {
+            input_record_id[j] = 0;
+        }
+
+        //Pushing first record from each file on the heap
+        for(int j = 0; j<buffers_to_process; j++)
+        {
+            heap.push({buffers[j][0], j});
+            if(!end_of_input[j])
+            {
+                Record record;
+                if(read_record(inputs[j], record))
+                {
+                    buffers[j][0] = record;
+                }
+                else
+                {
+                    buffers[j][0] = {-1, -1, -1, -1, -1};
+                    end_of_input[j] = true;
+                }
+            }
+            input_record_id[j]++;
+        }
+
+        //opening the output file
+        string merged_run_name = "merged" + to_string(merged_runs_number) + ".dat";
+        ofstream out(merged_run_name, ios::binary);
+        if (!out.is_open())
+        {
+            cerr << "Error: couldn't open file " << merged_run_name << endl;
+            return;
+        }
+
+        while(!heap.empty())
+        {
+            //getting next record from the heap
+            HeapNode node = heap.top();
+            heap.pop();
+
+            //saving the record into the output buffer
+            if(perimeter(node.rec)>0)        //last buffer partly filled with records {-1,-1,-1,-1,-1}
+            {
+                output_buffer[output_record_id] = node.rec;
+                output_record_id++;
+            }
+
+            //saving the page if the output buffer is filled
+            if(output_record_id == BLOCKING_FACTOR)
+            {
+                output_record_id = 0;
+                for(int j = 0; j<BLOCKING_FACTOR; j++)
+                {
+                    write_record(out, output_buffer[j]);
+                }
+            }
+
+            //putting next record in the buffer(next from run file) and heap(next from the buffer) if possible
+            int current_run_id = node.run_id;
+            if(perimeter(buffers[current_run_id][input_record_id[current_run_id]])>0)
+            {
+                heap.push({buffers[current_run_id][input_record_id[current_run_id]], current_run_id});
+            }
+            if(end_of_input[current_run_id])
+            {
+                buffers[current_run_id][input_record_id[current_run_id]] = {-1, -1, -1, -1, -1};
+            }
+            else
+            {
+                Record next_record;
+                if(read_record(inputs[current_run_id], next_record))
+                {
+                    buffers[current_run_id][input_record_id[current_run_id]] = next_record;
+                }
+                else
+                {
+                    end_of_input[current_run_id] = true;
+                    buffers[current_run_id][input_record_id[current_run_id]] = {-1, -1, -1, -1, -1};//?
+                }
+            }
+            input_record_id[current_run_id] = (input_record_id[current_run_id] + 1) % BLOCKING_FACTOR;
+        }
+
+        //saving the last, unfilled page
+        for(int j = 0; j<output_record_id; j++)
+        {
+            write_record(out, output_buffer[j]);
+        }
+
+        merged_runs.push_back(merged_run_name);
+        merged_runs_number++;
+            
+
+        //Cleanup
+        for (int j = 0; j<buffers_to_process; j++)
+        {
+            inputs[j].close();
+        }
+        out.close();
+        delete [] input_record_id;
+
+        //Printing
+        if(show_sorting_phases)
+        {
+            cout<<"Results of sorting:"<<endl;
+            print_dat_file(merged_run_name);
         }
     }
 
-    // Scalanie
-    while (!heap.empty()) {
-        HeapNode node = heap.top();
-        heap.pop();
+    merge_runs(merged_runs, final_output_run);   //repeat until there is only 1 run left
 
-        write_record(out, node.rec);
-
-        Record nextRec;
-        if (read_record(inputs[node.idx], nextRec)) {
-            heap.push({nextRec, node.idx});
-        }
-    }
-
-    // Sprzątanie
-    for (auto &f : inputs) f.close();
-    out.close();
 }
-
 
 int main()
 {
 	txt_to_dat(TXT_FILENAME, DAT_FILENAME); 
 	print_dat_file(DAT_FILENAME);
-	create_runs(DAT_FILENAME, 5);
-	
-	// Przygotowujemy listę wszystkich utworzonych runów
+
     vector<string> runs;
-    for (int i = 0; ; i++) {
-        string run_name = "run" + to_string(i) + ".dat";
-        ifstream f(run_name, ios::binary);
-        if (!f.is_open()) break; // koniec listy runów
-        runs.push_back(run_name);
-    }
+	create_runs(runs, DAT_FILENAME, BLOCKING_FACTOR*NUMBER_OF_BUFFERS);
 
     // Scalamy wszystkie runy do jednego pliku
     string mergedFile = "merged_output.dat";
