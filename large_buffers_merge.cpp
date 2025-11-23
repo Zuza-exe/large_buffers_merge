@@ -3,22 +3,27 @@
 #include <fstream>
 #include <string>
 #include <queue>
+#include<random>
+#include <iomanip>
 
 using namespace std;
 
-//#define		NUMBER_OF_RECORDS	1000	//N
-#define		BLOCKING_FACTOR	2		//b
-#define		NUMBER_OF_BUFFERS	3		//n
+#define		NUMBER_OF_RECORDS	25	//N
+#define		BLOCKING_FACTOR	10		//b
+#define		NUMBER_OF_BUFFERS	11		//n
 
 #define		TXT_FILENAME	"test_data.txt"
 #define		DAT_FILENAME	"test_data.dat"
+#define     RANDOM_TXT_FILENAME     "random_test_data.txt"
+#define     RANDOM_DAT_FILENAME     "random_test_data.dat"
+#define     OUTPUT_FILENAME     "merged_output.dat"
 
 // Flags
-bool random_records = true;		// true - random, false - manually
-bool show_sorting_phases = true;
+bool random_records = true;		// true - random, false - from txt file
+bool show_sorting_phases = false;
 
 
-// Liczniki operacji blokowych (globalne zmienne symulujące statystyki)
+//Counters
 int read_count = 0;
 int write_count = 0;
 int phase_count = 0;
@@ -36,7 +41,7 @@ struct HeapNode {
     int run_id; //index of run in which the record was
 
     bool operator>(const HeapNode &other) const {
-        return perimeter(rec) > perimeter(other.rec); // minimalny rekord na szczycie
+        return perimeter(rec) > perimeter(other.rec); //minimium perimeter on top
     }
 };
 
@@ -52,31 +57,53 @@ int compare_records(const void *a, const void *b) {
     return 0;
 }
 
-// Symulacja odczytu jednego rekordu z pliku binarnego
+void generate_random_records()
+{
+    ofstream out(RANDOM_TXT_FILENAME);
+    if (!out.is_open()) {
+        cerr << "Error: Couldn't open file "<< RANDOM_TXT_FILENAME << endl;
+        return;
+    }
+
+    //Generating random numbers 
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_real_distribution<double> dist(1.0, 10.0);  //from 1.0 to 10.0
+
+    for (int i = 0; i < NUMBER_OF_RECORDS; i++) {
+        for (int j = 0; j < 5; j++) {
+            out << fixed << setprecision(2) << dist(gen);
+            if (j < 4) out << " ";
+        }
+        out << "\n";
+    }
+
+    out.close();
+}
+
+//Reading one record from .dat file
 bool read_record(ifstream &f, Record &p) {
     if (f.read((char*)&p, sizeof(Record))) {
-        read_count++;
         return true;
     }
     return false;  // koniec pliku
 }
 
-// Symulacja zapisu jednego rekordu do pliku binarnego
+//Writing one record to .dat file
 void write_record(ofstream &f, const Record &p) {
     f.write((char*)&p, sizeof(Record));
-    write_count++;
 }
 
 void txt_to_dat(const string &txt, const string &dat) {
     ifstream in(txt);
-    ofstream out(dat, ios::binary | ios::out | ios::trunc);  // TRUNCATE + OUT
+    ofstream out(dat, ios::binary | ios::out | ios::trunc);  // trunc - file will be overwritten/created
 
     if (!in.is_open()) {
-        cerr << "Nie można otworzyć pliku tekstowego!" << endl;
+        cerr << "Error: Couldn't open .txt file"<< endl;
         return;
     }
     if (!out.is_open()) {
-        cerr << "Nie można otworzyć pliku binarnego do zapisu!" << endl;
+        cerr << "Error: Couldn't open .dat file" << endl;
         return;
     }
 
@@ -84,7 +111,7 @@ void txt_to_dat(const string &txt, const string &dat) {
     while (true) {
         for (int i = 0; i < 5; i++) {
             if (!(in >> r.sides[i])) {
-                return; // koniec pliku TXT
+                return; //eof
             }
         }
         out.write((char*)&r, sizeof(Record));
@@ -94,20 +121,20 @@ void txt_to_dat(const string &txt, const string &dat) {
 void print_dat_file(const string &filename) {
     ifstream in(filename, ios::binary);
     if (!in.is_open()) {
-        cerr << "Nie mogę otworzyć pliku: " << filename << endl;
+        cerr << "Error: Couldn't open file " << filename << endl;
         return;
     }
 
     Record p;
     int index = 0;
 
-    cout << "Zawartosc pliku " << filename << ":\n\n";
+    cout << "File " << filename << ":\n\n";
 
     while (in.read((char*)&p, sizeof(Record))) {
-        cout << "Rekord " << index++ << ":  ";
+        cout << "Record " << index++ << ":  ";
         for (int i = 0; i < 5; i++)
             cout << p.sides[i] << " ";
-        cout << " | obwód = " << perimeter(p) << endl;
+        cout << " | perimeter = " << perimeter(p) << endl;
     }
 	cout<<endl;
 
@@ -118,7 +145,7 @@ void print_dat_file(const string &filename) {
 void create_runs(vector<string> &runs, const string &inputFile, int runSize) {
     ifstream in(inputFile.c_str(), ios::binary);
     if (!in.is_open()) {
-        cerr << "Błąd: nie można otworzyć pliku " << inputFile << endl;
+        cerr << "Error: Couldn't open file " << inputFile << endl;
         return;
     }
 
@@ -127,8 +154,7 @@ void create_runs(vector<string> &runs, const string &inputFile, int runSize) {
     Record buffer[NUMBER_OF_BUFFERS * BLOCKING_FACTOR];
 
     Record record;
-    while (read_record(in, record)) {               // 🔸 używamy funkcji warstwy I/O
-        //buffer.push_back(record);
+    while (read_record(in, record)) {   
         buffer[counter] = record;
         counter++;
 
@@ -139,18 +165,20 @@ void create_runs(vector<string> &runs, const string &inputFile, int runSize) {
             ofstream out(run_name.c_str(), ios::binary);
 
             for (size_t i = 0; i < runSize; i++) {
-                write_record(out, buffer[i]);       // 🔸 używamy funkcji warstwy I/O
+                write_record(out, buffer[i]);  
             }
-
             out.close();
-            print_dat_file(run_name);
+            //print_dat_file(run_name);
 			counter = 0;
             runs.push_back(run_name);
             runIndex++;
+            read_count++;
+            write_count++;
         }
     }
+    read_count++;
 
-    // Zapisz pozostałości (ostatnią, niepełną serię)
+    //Save last, unfilled page
     if (counter > 0) {
         qsort(&buffer[0], counter, sizeof(Record), compare_records);
         string run_name = "run" + to_string(runIndex) + ".dat";
@@ -159,8 +187,9 @@ void create_runs(vector<string> &runs, const string &inputFile, int runSize) {
             write_record(out, buffer[i]);
         }
         out.close();
-		print_dat_file(run_name);
+		//print_dat_file(run_name);
         runs.push_back(run_name);
+        write_count++;
     }
 
     in.close();
@@ -261,10 +290,12 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                     {
                         end_of_input[k] = true;         //getting rid of unnecessary buffers <- backup - may be not needed
                     }
+                    read_count++;
                     //i++;    //may not be needed, but won't harm
                     break;
                 }
             }
+            read_count++;
             i++;
             if(i == input_runs_number)
             {
@@ -333,6 +364,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                 {
                     write_record(out, output_buffer[j]);
                 }
+                write_count++;
             }
 
             //putting next record in the buffer(next from run file) and heap(next from the buffer) if possible
@@ -351,11 +383,16 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                 if(read_record(inputs[current_run_id], next_record))
                 {
                     buffers[current_run_id][input_record_id[current_run_id]] = next_record;
+                    if(current_run_id == BLOCKING_FACTOR-1)
+                    {
+                        read_count++;
+                    }
                 }
                 else
                 {
                     end_of_input[current_run_id] = true;
-                    buffers[current_run_id][input_record_id[current_run_id]] = {-1, -1, -1, -1, -1};//?
+                    buffers[current_run_id][input_record_id[current_run_id]] = {-1, -1, -1, -1, -1};
+                    read_count++;
                 }
             }
             input_record_id[current_run_id] = (input_record_id[current_run_id] + 1) % BLOCKING_FACTOR;
@@ -366,10 +403,17 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
         {
             write_record(out, output_buffer[j]);
         }
+        if(output_record_id >0)
+        {
+            write_count++;
+        }
 
         merged_runs.push_back(merged_run_name);
         merged_runs_number++;
-            
+        if(buffers_to_process >1)
+        {
+            phase_count++;
+        }
 
         //Cleanup
         for (int j = 0; j<buffers_to_process; j++)
@@ -382,7 +426,6 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
         //Printing
         if(show_sorting_phases)
         {
-            cout<<"Results of sorting:"<<endl;
             print_dat_file(merged_run_name);
         }
     }
@@ -393,18 +436,28 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
 
 int main()
 {
-	txt_to_dat(TXT_FILENAME, DAT_FILENAME); 
-	print_dat_file(DAT_FILENAME);
+    string txt_file = TXT_FILENAME;
+    string dat_file = DAT_FILENAME;
+    if(random_records)
+	{   
+        txt_file = RANDOM_TXT_FILENAME;
+        dat_file = RANDOM_DAT_FILENAME;
+        generate_random_records();
+    }
+
+    txt_to_dat(txt_file, dat_file); 
+	print_dat_file(dat_file);
 
     vector<string> runs;
-	create_runs(runs, DAT_FILENAME, BLOCKING_FACTOR*NUMBER_OF_BUFFERS);
+	create_runs(runs, dat_file, BLOCKING_FACTOR*NUMBER_OF_BUFFERS);
 
-    // Scalamy wszystkie runy do jednego pliku
-    string mergedFile = "merged_output.dat";
-    merge_runs(runs, mergedFile);
+    merge_runs(runs, OUTPUT_FILENAME);
 
-    cout << "\nScalony plik:\n";
-    print_dat_file(mergedFile);
+    print_dat_file(OUTPUT_FILENAME);
+
+    cout<<"\nNumber of sorting phases: "<<phase_count<<endl;
+    cout<<"Number of disk reads: "<<read_count<<endl;
+    cout<<"Number of disk writes: "<<write_count<<endl;
 	
 	return 0;
 }
