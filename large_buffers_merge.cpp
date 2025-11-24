@@ -8,9 +8,9 @@
 
 using namespace std;
 
-#define		NUMBER_OF_RECORDS	25	//N
+#define		NUMBER_OF_RECORDS 1101	//N
 #define		BLOCKING_FACTOR	10		//b
-#define		NUMBER_OF_BUFFERS	11		//n
+#define		NUMBER_OF_BUFFERS   11		//n
 
 #define		TXT_FILENAME	"test_data.txt"
 #define		DAT_FILENAME	"test_data.dat"
@@ -20,7 +20,7 @@ using namespace std;
 
 // Flags
 bool random_records = true;		// true - random, false - from txt file
-bool show_sorting_phases = false;
+bool show_sorting_phases = true;
 
 
 //Counters
@@ -141,12 +141,13 @@ void print_dat_file(const string &filename) {
     in.close();
 }
 
-// Tworzenie początkowych serii
-void create_runs(vector<string> &runs, const string &inputFile, int runSize) {
+//Stage 1
+vector<string> create_runs(const string &inputFile, int runSize) {
+    vector<string> runs;
     ifstream in(inputFile.c_str(), ios::binary);
     if (!in.is_open()) {
         cerr << "Error: Couldn't open file " << inputFile << endl;
-        return;
+        return runs;
     }
 
     int runIndex = 0;
@@ -158,41 +159,46 @@ void create_runs(vector<string> &runs, const string &inputFile, int runSize) {
         buffer[counter] = record;
         counter++;
 
+        if(counter % BLOCKING_FACTOR == 0)      //single buffer filled
+        {
+            read_count++;
+            write_count++;
+        }
+
         if (counter == runSize) {
             qsort(&buffer[0], runSize, sizeof(Record), compare_records);
 
             string run_name = "run" + to_string(runIndex) + ".dat";
-            ofstream out(run_name.c_str(), ios::binary);
+            ofstream out(run_name.c_str(), ios::binary | ios::trunc);
 
             for (size_t i = 0; i < runSize; i++) {
                 write_record(out, buffer[i]);  
             }
             out.close();
-            //print_dat_file(run_name);
+            print_dat_file(run_name);
 			counter = 0;
             runs.push_back(run_name);
             runIndex++;
-            read_count++;
-            write_count++;
         }
     }
-    read_count++;
 
     //Save last, unfilled page
     if (counter > 0) {
         qsort(&buffer[0], counter, sizeof(Record), compare_records);
         string run_name = "run" + to_string(runIndex) + ".dat";
-        ofstream out(run_name.c_str(), ios::binary);
+        ofstream out(run_name.c_str(), ios::binary | ios::trunc);
         for (size_t i = 0; i < counter; i++) {
             write_record(out, buffer[i]);
         }
         out.close();
-		//print_dat_file(run_name);
+		print_dat_file(run_name);
         runs.push_back(run_name);
+        read_count++;
         write_count++;
     }
 
     in.close();
+    return runs;
 }
 
 void reset_end_of_input(bool end_of_input[NUMBER_OF_BUFFERS-1])
@@ -228,6 +234,7 @@ void print_buffer(Record buffers[BLOCKING_FACTOR])
     }
 }*/
 
+//Stage 2
 void merge_runs(const vector<string> &input_runs, const string &final_output_run)
 {
     int input_runs_number = input_runs.size();
@@ -269,7 +276,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                 return;
             }
 
-            //filling with first b records 
+            //filling buffers with first b records 
             int record_counter = 0;
             while(record_counter < BLOCKING_FACTOR)
             {
@@ -281,7 +288,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                 }
                 else
                 {
-                    for (int k = record_counter; k < BLOCKING_FACTOR-1; k++)        //if run has less than b records - the last file
+                    for (int k = record_counter; k < BLOCKING_FACTOR; k++)        //if run has less than b records - the last file
                     {
                         buffers[j][k] = {-1, -1, -1, -1, -1};       //filling with "empty" records
                     }
@@ -290,7 +297,6 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                     {
                         end_of_input[k] = true;         //getting rid of unnecessary buffers <- backup - may be not needed
                     }
-                    read_count++;
                     //i++;    //may not be needed, but won't harm
                     break;
                 }
@@ -329,6 +335,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                 {
                     buffers[j][0] = {-1, -1, -1, -1, -1};
                     end_of_input[j] = true;
+                    read_count++;       //run had only one record
                 }
             }
             input_record_id[j]++;
@@ -336,7 +343,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
 
         //opening the output file
         string merged_run_name = "merged" + to_string(merged_runs_number) + ".dat";
-        ofstream out(merged_run_name, ios::binary);
+        ofstream out(merged_run_name, ios::binary | ios::trunc);
         if (!out.is_open())
         {
             cerr << "Error: couldn't open file " << merged_run_name << endl;
@@ -350,7 +357,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
             heap.pop();
 
             //saving the record into the output buffer
-            if(perimeter(node.rec)>0)        //last buffer partly filled with records {-1,-1,-1,-1,-1}
+            if(perimeter(node.rec)>0)        //buffers might be partly filled with records {-1,-1,-1,-1,-1}
             {
                 output_buffer[output_record_id] = node.rec;
                 output_record_id++;
@@ -369,6 +376,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
 
             //putting next record in the buffer(next from run file) and heap(next from the buffer) if possible
             int current_run_id = node.run_id;
+            //if buffer has normal record (not {-1,-1,-1,-1,-1})
             if(perimeter(buffers[current_run_id][input_record_id[current_run_id]])>0)
             {
                 heap.push({buffers[current_run_id][input_record_id[current_run_id]], current_run_id});
@@ -383,7 +391,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                 if(read_record(inputs[current_run_id], next_record))
                 {
                     buffers[current_run_id][input_record_id[current_run_id]] = next_record;
-                    if(current_run_id == BLOCKING_FACTOR-1)
+                    if(input_record_id[current_run_id] == BLOCKING_FACTOR-1)     //we reached the end of the buffer
                     {
                         read_count++;
                     }
@@ -392,7 +400,6 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
                 {
                     end_of_input[current_run_id] = true;
                     buffers[current_run_id][input_record_id[current_run_id]] = {-1, -1, -1, -1, -1};
-                    read_count++;
                 }
             }
             input_record_id[current_run_id] = (input_record_id[current_run_id] + 1) % BLOCKING_FACTOR;
@@ -406,6 +413,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
         if(output_record_id >0)
         {
             write_count++;
+            read_count++;
         }
 
         merged_runs.push_back(merged_run_name);
@@ -426,6 +434,7 @@ void merge_runs(const vector<string> &input_runs, const string &final_output_run
         //Printing
         if(show_sorting_phases)
         {
+            cout<<"Sorting phase number "<<phase_count<<endl;
             print_dat_file(merged_run_name);
         }
     }
@@ -449,7 +458,7 @@ int main()
 	print_dat_file(dat_file);
 
     vector<string> runs;
-	create_runs(runs, dat_file, BLOCKING_FACTOR*NUMBER_OF_BUFFERS);
+	runs = create_runs(dat_file, BLOCKING_FACTOR*NUMBER_OF_BUFFERS);
 
     merge_runs(runs, OUTPUT_FILENAME);
 
